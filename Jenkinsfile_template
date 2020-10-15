@@ -1,0 +1,77 @@
+def hostCacheDir = '/tmp/jenkins_data/.cache/.m2'
+def homeDir = '/tmp/maven'
+def destinationDir = homeDir + '/.m2' 
+def argsString = '-v ' + hostCacheDir + ':' + destinationDir + ' -e MAVEN_HOME=' + destinationDir
+def buildEngine = 'mvn -Duser.home=' + homeDir + ' '
+
+pipeline {
+
+    agent any
+
+    environment {
+        registry = 'ims19/petclinic'
+        gitRepo = 'https://github.com/ims-19/petclinic.git'
+        registryCredentials = 'docker-hub'
+        dockerImage = 'maven:3.6.3-jdk-11'
+    }
+    stages {
+        stage('Clone') {
+            steps {
+                git gitRepo
+            }
+        }
+        stage('Prepare Application') {
+            agent {
+                docker {
+                    image env.dockerImage
+                    args argsString
+                    reuseNode true
+                }
+            }
+            stages {
+                stage('Build') {
+                    steps {
+                        sh buildEngine + 'install -DskipTests'
+                    }
+                }
+                stage('Test') {
+                    steps {
+                        sh buildEngine + 'test' 
+                    }
+                }
+                stage('Sonarqube') {
+                    steps {
+                        withSonarQubeEnv([installationName: 'sonarqube', credentialsId: 'sonarqube']) {
+                            println "${SONAR_HOST_URL}, ${SONAR_AUTH_TOKEN}"
+                            sh buildEngine + "sonar:sonar -Dsonar.host.url=${SONAR_HOST_URL} -Dsonar.login=${SONAR_AUTH_TOKEN}"
+                        }
+                    }
+                }
+                stage("Await Sonarqube Response") {
+                    steps {
+                        timeout(time: 5, unit: 'MINUTES') {
+                            waitForQualityGate webhookSecretId: 'sonarqube-webhook', abortPipeline: true
+                        }
+                    }
+                }
+            }
+        }
+        stage('Build image') {
+            steps {
+                script {
+                    dockerImage = docker.build(registry + ":$BUILD_NUMBER")
+                }
+            }
+        }
+        stage('Publish image') {
+            steps {
+                script {
+                    docker.withRegistry('', registryCredentials) {
+                        dockerImage.push()
+                        dockerImage.push("latest")
+                    }
+                }
+            }
+        }
+    }
+}
