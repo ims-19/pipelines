@@ -54,16 +54,21 @@ pipeline {
                         }
                     }
                 }
+                stage('Package') {
+                    steps {
+                        sh buildEngine + 'package -DskipTests'
+                    }
+                }
             }
         }
-        stage('Build image') {
+        stage('Build Image') {
             steps {
                 script {
                     dockerImage = docker.build(registry + ":$BUILD_NUMBER")
                 }
             }
         }
-        stage('Publish image') {
+        stage('Publish Image') {
             steps {
                 script {
                     docker.withRegistry('', registryCredentials) {
@@ -71,6 +76,19 @@ pipeline {
                         dockerImage.push("latest")
                     }
                 }
+            }
+        }
+        stage('Analyze Image') {
+            steps {
+                sh 'echo "docker.io/' + registry + ':latest `pwd`/Dockerfile" > anchore_images'
+                anchore name: 'anchore_images'
+            }
+        }
+        stage('teardown') {
+            steps {
+                sh'''
+                    for i in `cat anchore_images | awk '{print $1}'`;do docker rmi $i; done
+                '''
             }
         }
     }
