@@ -3,17 +3,20 @@ def homeDir = '/tmp/maven'
 def destinationDir = homeDir + '/.m2' 
 def argsString = '-v ' + hostCacheDir + ':' + destinationDir + ' -e MAVEN_HOME=' + destinationDir
 def buildEngine = 'mvn -Duser.home=' + homeDir + ' '
+def repository = 'ims19/petclinic'
+def gitRepo = 'https://github.com/ims-19/petclinic.git'
+def registryCredentials = 'docker-hub'
+def dockerImage = 'maven:3.6.3-jdk-11'
+def updatedLatest = false
 
 pipeline {
 
-    agent any
-
     environment {
-        registry = 'ims19/petclinic'
-        gitRepo = 'https://github.com/ims-19/petclinic.git'
-        registryCredentials = 'docker-hub'
-        dockerImage = 'maven:3.6.3-jdk-11'
+        DOCKER_HUB = credentials('docker-hub')
     }
+
+    agent any
+    
     stages {
         stage('Clone') {
             steps {
@@ -23,7 +26,7 @@ pipeline {
         stage('Prepare Application') {
             agent {
                 docker {
-                    image env.dockerImage
+                    image dockerImage
                     args argsString
                     reuseNode true
                 }
@@ -64,24 +67,33 @@ pipeline {
         stage('Build Image') {
             steps {
                 script {
-                    dockerImage = docker.build(registry + ":$BUILD_NUMBER")
+                    dockerImage = docker.build(repository + ":$BUILD_NUMBER")
                 }
             }
         }
-        stage('Publish Image') {
+        stage('Push tag') {
             steps {
                 script {
                     docker.withRegistry('', registryCredentials) {
                         dockerImage.push()
-                        dockerImage.push("latest")
                     }
                 }
             }
         }
         stage('Analyze Image') {
             steps {
-                sh 'echo "docker.io/' + registry + ':latest `pwd`/Dockerfile" > anchore_images'
-                anchore name: 'anchore_images'
+                sh 'echo "docker.io/' + repository + ':' + BUILD_NUMBER + ' `pwd`/Dockerfile" > anchore_images'
+                anchore name: 'anchore_images', forceAnalyze: 'true', engineRetries: '600'
+            }
+        }
+        stage('Push latest') {
+            steps {
+                script {
+                    docker.withRegistry('', registryCredentials) {
+                        dockerImage.push("latest")
+                    }
+                    updatedLatest = true
+                }
             }
         }
         stage('teardown') {
@@ -89,6 +101,27 @@ pipeline {
                 sh'''
                     for i in `cat anchore_images | awk '{print $1}'`;do docker rmi $i; done
                 '''
+            }
+        }
+    }
+
+    post {
+        failure {
+            script {
+                if (!updatedLatest) {
+                    token = sh(
+                        returnStdout: true,
+                        script: """
+                            set +x
+                            echo \$(curl -s -H \"Content-Type: application/json\" -X POST -d '{\"username\": \"$DOCKER_HUB_USR\", \"password\": \"$DOCKER_HUB_PSW\"}' https://hub.docker.com/v2/users/login/ | jq -r .token)
+                        """
+                    )
+                    
+                    sh """
+                        set +x
+                        curl -i -H \"Authorization: JWT ${token}\" -X DELETE https://hub.docker.com/v2/repositories/ims19/petclinic/tags/${BUILD_NUMBER}/
+                    """
+                }
             }
         }
     }
