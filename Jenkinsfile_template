@@ -44,7 +44,7 @@ pipeline {
                 }
                 stage('Sonarqube') {
                     steps {
-                        sh buildEngine + "package dependency-check:aggregate"
+                        sh buildEngine + "dependency-check:aggregate"
                         withSonarQubeEnv([installationName: 'sonarqube', credentialsId: 'sonarqube']) {
                             sh buildEngine + "sonar:sonar -Dsonar.host.url=${SONAR_HOST_URL} -Dsonar.login=${SONAR_AUTH_TOKEN}"
                         }
