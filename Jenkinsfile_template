@@ -1,12 +1,9 @@
-def hostCacheDir = '/tmp/jenkins_data/.cache/.m2'
-def homeDir = '/tmp/maven'
-def destinationDir = homeDir + '/.m2' 
-def argsString = '-v ' + hostCacheDir + ':' + destinationDir + ' -e MAVEN_HOME=' + destinationDir
-def buildEngine = 'mvn -Duser.home=' + homeDir + ' '
+def mavenChache = '/root/.m2'
+def argsString = '-v ' + mavenChache + ':' + mavenChache + ' -v /usr/bin/nc:/usr/bin/nc -v /usr/bin/lsof:/usr/bin/lsof'
 def repository = 'ims19/petclinic'
 def gitRepo = 'https://github.com/ims-19/petclinic.git'
 def registryCredentials = 'docker-hub'
-def dockerImage = 'maven:3.6.3-jdk-11'
+def dockerImage = 'openjdk:11-jdk'
 def updatedLatest = false
 
 pipeline {
@@ -34,19 +31,20 @@ pipeline {
             stages {
                 stage('Build') {
                     steps {
-                        sh buildEngine + 'install -DskipTests'
+                        sh "ls"
+                        sh "./mvnw install -DskipTests"
                     }
                 }
                 stage('Test') {
                     steps {
-                        sh buildEngine + 'test' 
+                        sh "./mvnw test"
                     }
                 }
                 stage('Sonarqube') {
                     steps {
-                        sh buildEngine + "dependency-check:aggregate"
+                        sh "./mvnw dependency-check:aggregate"
                         withSonarQubeEnv([installationName: 'sonarqube', credentialsId: 'sonarqube']) {
-                            sh buildEngine + "sonar:sonar -Dsonar.host.url=${SONAR_HOST_URL} -Dsonar.login=${SONAR_AUTH_TOKEN}"
+                            sh "./mvnw sonar:sonar -Dsonar.host.url=${SONAR_HOST_URL} -Dsonar.login=${SONAR_AUTH_TOKEN}"
                         }
                     }
                 }
@@ -59,7 +57,14 @@ pipeline {
                 }
                 stage('Package') {
                     steps {
-                        sh buildEngine + 'package -DskipTests'
+                        sh """
+                            ./mvnw package -DskipTests
+                            cp /var/jenkins_home/contrast.jar .
+                            java  -jar -javaagent:contrast.jar target/*.jar --server.port=4040&
+                            while ! nc -z localhost 4040 ; do sleep 3 ; done
+                            /var/jenkins_home/smoke_tests.sh
+                            kill \$(lsof -t -i:4040)
+                        """
                     }
                 }
             }
